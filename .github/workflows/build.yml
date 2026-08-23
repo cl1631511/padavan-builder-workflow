@@ -1,62 +1,116 @@
-name: Build Single doh_proxy Binary
+name: Build firmware
 
 on:
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
+  push:
+    tags:
+      - '*'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: registry.gitlab.com/hadzhioglu/padavan-ng  # 使用已配好环境的容器
-    defaults:
-      run:
-        shell: bash
-
+    container: registry.gitlab.com/hadzhioglu/padavan-ng
+    defaults: { run: { shell: bash } }
     steps:
-    # 1. 检出你的配置文件仓库 (包含 variables, build.config 等)
-    - name: Checkout configs
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-    # 2. 读取 variables 文件，获取源码仓库、分支、工具链地址等信息
-    - name: Load variables
+    - name: Get variables
       run: |
         sed -i 's|\r$||g' variables build.config
         . <(cat variables build.config)
-        for v in "${!PADAVAN_@}"; do
+        PADAVAN_THEMES="${PADAVAN_THEMES[*]}"
+        for v in "${!PADAVAN_@}" "${!CONFIG_@}"; do
           echo "$v=${!v}" >> $GITHUB_ENV
         done
 
-    # 3. 克隆完整的 padavan-ng 源码 (这是编译所必需的)
-    - name: Clone padavan-ng source
+    - name: Download sources and toolchain
       run: |
         git config --global --add safe.directory '*'
         git clone -b "$PADAVAN_BRANCH" "$PADAVAN_REPO"
         git -C padavan-ng checkout "$PADAVAN_COMMIT"
-
-    # 4. 下载并解压交叉编译工具链 (这是关键依赖)
-    - name: Download toolchain
-      run: |
         wget -qO- "$PADAVAN_TOOLCHAIN_URL" | tar -C padavan-ng --zstd -xf -
 
-    # 5. 核心步骤: 只编译 doh_proxy 插件
-    - name: Build doh_proxy only
+    - name: Install themes
       run: |
-        cd padavan-ng/trunk/user/doh_proxy
-        echo "Starting single plugin build..."
-        # 直接执行 make，它会根据 Makefile 完成下载、配置和编译
-        make
-        # 检查编译结果
-        if [[ -f https_dns_proxy/build/https_dns_proxy ]]; then
-          echo "Build successful!"
-          ls -lh https_dns_proxy/build/https_dns_proxy
-        else
-          echo "Build failed: binary not found"
-          exit 1
+        if [[ -n $PADAVAN_THEMES ]]; then
+          git clone --depth 1 -b "$PADAVAN_THEMES_BRANCH" "$PADAVAN_THEMES_REPO" themes
+          cp -r themes/common-theme themes/jquery.js padavan-ng/trunk/user/www/n56u_ribbon_fixed
+
+          for theme in $PADAVAN_THEMES; do
+            echo "Installing $theme theme"
+            cp -r "themes/$theme-theme" padavan-ng/trunk/user/www/n56u_ribbon_fixed
+          done
         fi
 
-    # 6. 上传编译好的二进制文件作为 Artifact
-    - name: Upload binary
+    - name: Run custom pre-build script
+      run: '[[ -f pre-build.sh ]] && . pre-build.sh || :'
+
+    - name: Build firmware
+      run: |
+        cp build.config padavan-ng/trunk/.config
+        cd padavan-ng/trunk
+        ./clear_tree.sh
+        ./build_firmware.sh
+
+        FW_FILE_NAME="$(find images -type f -regextype posix-extended -iregex ".*\.(trx|bin)$" \
+                        -printf "%T@\t%f\n" | sort -V | tail -1 | cut -f2)"
+        [[ -n $FW_FILE_NAME ]] || { echo "Firmware file not found"; exit 1; }
+        echo "FW_FILE_NAME=$FW_FILE_NAME" >> $GITHUB_ENV
+
+    # ========== 新增步骤：提取 doh_proxy 二进制文件 ==========
+    - name: Extract doh_proxy binary
+      run: |
+        # 定义二进制文件的路径（相对于工作目录）
+        DOH_PROXY_PATH="padavan-ng/trunk/user/doh_proxy/https_dns_proxy/build/https_dns_proxy"
+        
+        # 检查文件是否存在
+        if [[ -f "$DOH_PROXY_PATH" ]]; then
+          echo "✅ Found doh_proxy binary at $DOH_PROXY_PATH"
+          # 复制到工作目录根，方便上传
+          cp "$DOH_PROXY_PATH" ./doh_proxy
+          # 显示文件信息
+          ls -lh ./doh_proxy
+          file ./doh_proxy
+          echo "DOH_PROXY_EXISTS=true" >> $GITHUB_ENV
+        else
+          echo "⚠️ Warning: doh_proxy binary not found at $DOH_PROXY_PATH"
+          echo "Searching for it in the build output..."
+          # 在整个 padavan-ng 目录中搜索
+          find padavan-ng -name "*doh*" -type f 2>/dev/null || true
+          find padavan-ng -name "*proxy*" -type f 2>/dev/null || true
+          echo "DOH_PROXY_EXISTS=false" >> $GITHUB_ENV
+        fi
+    # ========================================================
+
+    - name: Run custom post-build script
+      run: '[[ -f post-build.sh ]] && . post-build.sh || :'
+
+    - name: Prepare artifacts
+      run: |
+        cp "padavan-ng/trunk/images/$FW_FILE_NAME" .
+        echo "BUILD_TIMESTAMP=$(date '+%Y.%m.%d_%H.%M.%S')" >> $GITHUB_ENV
+
+    # ========== 修改：在 artifacts 中包含 doh_proxy ==========
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: doh_proxy-binary
-        path: padavan-ng/trunk/user/doh_proxy/https_dns_proxy/build/https_dns_proxy
+        name: padavan-ng_${{ env.CONFIG_VENDOR }}_${{ env.CONFIG_FIRMWARE_PRODUCT_ID }}_${{ env.BUILD_TIMESTAMP }}
         retention-days: 7
+        path: |
+          ${{ env.FW_FILE_NAME }}
+          build.config
+          doh_proxy
+    # ========================================================
+
+    - name: Check firmware size
+      run: |
+        partitions=padavan-ng/trunk/configs/boards/$CONFIG_VENDOR/$CONFIG_FIRMWARE_PRODUCT_ID/partitions.config
+        max_fw_size="$(awk '/Firmware/ { getline; getline; sub(",", ""); print strtonum($2); }' "$partitions")"
+        fw_size="$(stat -c %s "$FW_FILE_NAME")"
+
+        if ((fw_size > max_fw_size)); then
+          fw_size_fmtd="$(numfmt --grouping "$fw_size") bytes"
+          max_fw_size_fmtd="$(numfmt --grouping "$max_fw_size") bytes"
+          echo "Firmware size ($fw_size_fmtd) exceeds max size ($max_fw_size_fmtd) for your target device"
+          exit 1
+        fi
