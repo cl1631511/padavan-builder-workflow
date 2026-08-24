@@ -57,31 +57,6 @@ jobs:
         [[ -n $FW_FILE_NAME ]] || { echo "Firmware file not found"; exit 1; }
         echo "FW_FILE_NAME=$FW_FILE_NAME" >> $GITHUB_ENV
 
-    # ========== 新增步骤：提取 doh_proxy 二进制文件 ==========
-    - name: Extract doh_proxy binary
-      run: |
-        # 定义二进制文件的路径（相对于工作目录）
-        DOH_PROXY_PATH="padavan-ng/trunk/user/doh_proxy/https_dns_proxy/build/https_dns_proxy"
-        
-        # 检查文件是否存在
-        if [[ -f "$DOH_PROXY_PATH" ]]; then
-          echo "✅ Found doh_proxy binary at $DOH_PROXY_PATH"
-          # 复制到工作目录根，方便上传
-          cp "$DOH_PROXY_PATH" ./doh_proxy
-          # 显示文件信息
-          ls -lh ./doh_proxy
-          file ./doh_proxy
-          echo "DOH_PROXY_EXISTS=true" >> $GITHUB_ENV
-        else
-          echo "⚠️ Warning: doh_proxy binary not found at $DOH_PROXY_PATH"
-          echo "Searching for it in the build output..."
-          # 在整个 padavan-ng 目录中搜索
-          find padavan-ng -name "*doh*" -type f 2>/dev/null || true
-          find padavan-ng -name "*proxy*" -type f 2>/dev/null || true
-          echo "DOH_PROXY_EXISTS=false" >> $GITHUB_ENV
-        fi
-    # ========================================================
-
     - name: Run custom post-build script
       run: '[[ -f post-build.sh ]] && . post-build.sh || :'
 
@@ -90,7 +65,6 @@ jobs:
         cp "padavan-ng/trunk/images/$FW_FILE_NAME" .
         echo "BUILD_TIMESTAMP=$(date '+%Y.%m.%d_%H.%M.%S')" >> $GITHUB_ENV
 
-    # ========== 修改：在 artifacts 中包含 doh_proxy ==========
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -99,8 +73,6 @@ jobs:
         path: |
           ${{ env.FW_FILE_NAME }}
           build.config
-          doh_proxy
-    # ========================================================
 
     - name: Check firmware size
       run: |
