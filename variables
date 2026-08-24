@@ -1,4 +1,3 @@
-# 源码仓库地址（改为你 fork 的 GitHub 仓库）
 PADAVAN_REPO="https://gitlab.com/hadzhioglu/padavan-ng.git"
 PADAVAN_BRANCH="master"
 PADAVAN_COMMIT="HEAD"
