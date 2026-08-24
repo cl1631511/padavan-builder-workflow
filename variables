@@ -1,5 +1,5 @@
 # 源码仓库地址（改为你 fork 的 GitHub 仓库）
-PADAVAN_REPO="https://github.com/cl1631511/padavan-ng.git"
+PADAVAN_REPO="https://gitlab.com/hadzhioglu/padavan-ng.git"
 PADAVAN_BRANCH="master"
 PADAVAN_COMMIT="HEAD"
 PADAVAN_TOOLCHAIN_URL="https://gitlab.com/api/v4/projects/hadzhioglu%2Fpadavan-ng/packages/generic/toolchain/latest/toolchain.tzst"
